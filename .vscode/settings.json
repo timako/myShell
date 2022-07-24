@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "features.h": "c",
+        "dirent.h": "c",
+        "parser.h": "c"
+    }
+}
