@@ -312,11 +312,11 @@ int gettoken(char **ps, char *es, char **q, char **eq)
   int ret;
 
   s = *ps;
-  while (s < es && strchr(whitespace, *s))
+  while (s < es && strchr(whitespace, *s))//如果 *s 不是空字符
     s++;
-  if (q)
+  if (q) //q 非空的话，q重新指向s
     *q = s;
-  ret = *s;
+  ret = *s;//预设返回值
   switch (*s)
   {
   case 0:
