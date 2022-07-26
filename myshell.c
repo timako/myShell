@@ -4,16 +4,19 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <unistd.h>
-#include <sys/syscall.h>
-#include <sys/signal.h>
-#include <sys/time.h>
-#include <sys/stat.h>
+#include <time.h>
 #include <errno.h>
 #include <stdbool.h>
 #include <termios.h>
 #include <dirent.h>
 #include <assert.h>
+#include <parser.h>
+#include <sys/syscall.h>
+#include <sys/signal.h>
+#include <sys/time.h>
+#include <sys/stat.h>
 
+#include <sys/wait.h>
 #define MAX_JOB 100
 #define TEST_MODE
 
@@ -28,9 +31,9 @@
     } while (0)
 
 #ifdef TEST_MODE
-  #define LOG(fmt, ...) printf("\33[1;34m[%s,%d,%s]] " fmt "\33[0m\n", __FILE__, __LINE__, __func__, ##__VA_ARGS__);
+#define LOG(fmt, ...) printf("\33[1;34m[%s,%d,%s]] " fmt "\33[0m\n", __FILE__, __LINE__, __func__, ##__VA_ARGS__);
 #else
-  #define LOG(fmt, ...)
+#define LOG(fmt, ...)
 #endif
 
 #define TODO() panic_on(1, "Please implement me");
@@ -53,6 +56,26 @@ enum
     SH_UMASK
 };
 
+struct foregroundprocess
+{
+    int pid;
+    char *pname;
+} FG;
+int sh_bg(char **argv);
+int sh_cd(char **argv);
+int sh_clr(char **argv);
+int sh_dir(char **argv);
+int sh_echo(char **argv);
+int sh_exec(char **argv);
+int sh_exit(char **argv);
+int sh_fg(char **argv);
+int sh_help(char **argv);
+int sh_jobs(char **argv);
+int sh_pwd(char **argv);
+int sh_set(char **argv);
+int sh_time(char **argv);
+int sh_umask(char **argv);
+
 typedef int (*handler)(char *);
 
 /*inner cmd*/
@@ -61,22 +84,6 @@ struct icmd
     char *name;
     handler handler;
 };
-
-int sh_bg(char *str);
-int sh_cd(char *str);
-int sh_clr(char *str);
-int sh_dir(char *str);
-int sh_echo(char *str);
-int sh_exec(char *str);
-int sh_exit(char *str);
-int sh_fg(char *str);
-int sh_help(char *str);
-int sh_jobs(char *str);
-int sh_pwd(char *str);
-int sh_set(char *str);
-int sh_time(char *str);
-int sh_umask(char *str);
-
 struct icmd innercmd[] = {
     [SH_BG]
     { "bg", sh_bg },
@@ -97,7 +104,7 @@ struct icmd innercmd[] = {
     [SH_HELP]
     { "help", sh_help },
     [SH_JOBS]
-    { "jobs", sh_jobs },
+    { "childProcessPool", sh_jobs },
     [SH_PWD]
     { "pwd", sh_pwd },
     [SH_SET]
@@ -128,7 +135,57 @@ struct globalConfig
 /*Teiminal*/
 static struct termios termios_Orig;
 static struct termios termios_Editor;
+/*Signal handler*/
+struct sigaction osig;
+struct sigaction nsig;
+void hSIGCHLD(int sig_no, siginfo_t *info, void *vcontext)
+{
+    pid_t pid = info->si_pid;
+    int i;
+    for (i = 0; i < MAX_JOB; i++)
+    {
+        if (pid == childProcessPool[i].pid)
+            break;
+    }
 
+    if (i < MAX_JOB)
+    {
+
+        if (childProcessPool[i].status == PALIVE)
+        {
+            childProcessPool[i].status = PDEAD;
+            deljob(pid);
+        }
+    }
+}
+void hSIGTSTP(int sig_no)
+{
+    if (FG.pid != -1)
+    {
+        addjob(FG.pid, FG.pname, PSUSPEND);
+        kill(FG.pid, SIGSTOP);
+        FG.pid = -1;
+        FG.pname = NULL;
+    }
+}
+
+void initsig()
+{
+    memset(&nsig, 0, sizeof(nsig));
+    nsig.sa_sigaction = hSIGCHLD;
+    nsig.sa_flags = SA_SIGINFO | SA_RESTART;
+    sigemptyset(&nsig.sa_mask);
+    sigaction(SIGCHLD, &nsig, &osig);
+    signal(SIGTSTP, hSIGTSTP);
+    signal(SIGSTOP, hSIGTSTP);
+}
+
+struct environmentvariable
+{
+    char *shell;
+    char *parent;
+    char *directory;
+} E;
 /*将shell终端恢复原设置*/
 void disableTerminalSettings()
 {
@@ -150,7 +207,7 @@ int enableTerminalSettings()
     /*命令行参数设置*/
 
     /*取消SIG信号：ctrl-z，ctrl-c*/
-    termios_Editor.c_lflag &= ~(ISIG);
+    // termios_Editor.c_lflag &= ~(ISIG);
 
     //设置为当前的命令参数
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &termios_Editor);
@@ -187,21 +244,45 @@ int getcmd(char *buf, int nbuf)
     }
     return 0;
 }
-
+int parsebgmode(char *buf)
+{
+    bgmode = 0;
+    for (char *p = buf; *p != '\0'; p++)
+    {
+        if (*p == '&')
+        {
+            bgmode = 1;
+            *p = '\0';
+            break;
+        }
+    }
+}
+extern int bgmode;
 int main()
 {
     char buf[512];
     while (getcmd(buf, 512))
     {
+        bgmode = parsebgmode(buf);
         int pid = fork();
         if (pid == 0)
         {
-            runcmd(parsecmd(buf));
-            panic_on(1, "Should not reach here");
+            runcmd();
+            // panic_on(1, "Should not reach here");
         }
         else if (pid > 0)
         {
-            waitpid(pid, NULL, 0);
+            if (!!bgmode)
+            {
+                int jobid = addjob(pid, buf, PALIVE);
+                printf("[%d] %d\n", jobid, pid);
+            }
+            else
+            {
+                FG.pid = pid;
+                strcpy(FG.pname, buf);
+            }
+            waitpid(pid, NULL, (!!bgmode) ? WNOHANG : WUNTRACED);
             continue;
         }
         else
@@ -209,27 +290,6 @@ int main()
             panic_on(1, "Fork Err");
         }
     }
-}
-
-FILE *
-get_outfd_from_str(char *str)
-{
-    char *filename = NULL;
-    int ret = sscanf(str, "*>%[^ ]", filename);
-    if(ret == 0){
-      if((ret = sscanf(str, "*>>%[^ ]", filename))== 0){
-        return stdout;
-      }
-      FILE *fd = fopen(filename, 'a');
-      if (fd < 0)
-          perror("Invalid filename");
-      return fd;
-    }
-    LOG("Filename = %s\n", filename); // May have error here, need further log test
-    FILE *fd = fopen(filename, 'w');
-    if (fd < 0)
-        perror("Invalid filename");
-    return fd;
 }
 
 /*NOTE: printf is not async-signal-safe*/
@@ -249,14 +309,15 @@ void sigint()
     exit(0);
 }
 
-int sh_bg(char *str)
+int sh_bg(char **argv)
 {
-    panic_on(str[0] != 'b' || str[1] != 'g' || str[2] != '\0', "Parsing Err");
+    panic_on(!strcmp(argv[0], "bg"), "Parsing Err");
     char *delim = " ";
     char *p;
     int jobid;
     /*check all paras*/
-    p = strtok(str, delim);
+    p = argv[1];
+    int ind = 1;
     while (p != NULL)
     {
         jobid = atoi(p);
@@ -279,54 +340,76 @@ int sh_bg(char *str)
             return -1;
         }
         /*At last*/
-        p = strtok(NULL, delim);
+        ind++;
+        p = argv[ind];
     }
     /*process all paras*/
-    p = strtok(str, delim);
+    ind = 1;
+    p = argv[1];
     while (p != NULL)
     {
         jobid = atoi(p);
         if (childProcessPool[jobid].status == PSUSPEND)
         {
             kill(childProcessPool[jobid].pid, SIGCONT);
+            childProcessPool[jobid].status = PALIVE;
         }
         else
         {
             fprintf(stderr, "pid: %d doesn't exist to continue\n", jobid);
         }
         /*At last*/
-        p = strtok(NULL, delim);
+        ind++;
+        p = argv[ind];
     }
     return 0;
 }
 
-int sh_cd(char *str)
+int sh_cd(char **argv)
 {
-    panic_on(str[0] != 'c' || str[1] != 'd' || str[2] != '\0', "Parsing Err");
-    if (syscall(SYS_chdir, str + 3) < 0)
-        fprintf(stderr, "cannot cd %s\n", str + 3);
-    return 1;
+
+    panic_on(!strcmp(argv[0], "cd"), "Parsing Err");
+    if (argv[1] != NULL)
+    {
+        if (syscall(SYS_chdir, argv[1]) < 0)
+        {
+            fprintf(stderr, "cannot cd %s\n", argv[1]);
+            return 1;
+        }
+    }
+    else
+    {
+        char path[128];
+        getcwd(path, 128);
+        printf("%s\n", path);
+    }
+    return 0;
 }
 
-int sh_clr(char *str)
+int sh_clr(char **argv)
 {
-    if (strlen(str) == 3 && str[0] == 'c' && str[1] == 'l' && str[2] == 'r' && str[3] == '\0')
+    panic_on(!strcmp(argv[0], "clr"), "Parsing Err");
+    if (argv[1] != NULL)
     {
         write(STDOUT_FILENO, "\x1b[2J", 4);
+        return 0;
     }
     else
     {
         fprintf(stderr, "clr format: clr");
+        return 1;
     }
 }
-int sh_dir(char *str)
+int sh_dir(char **argv)
 {
-    panic_on(str[0] != 'd' || str[1] != 'i' || str[2] != 'r' || str[3] != '\0', "Parsing Err");
+    panic_on(!strcmp(argv[0], "dir"), "Parsing Err");
     char *delim = " ";
-    char *p;
-    p = strtok(str, delim);
-    if (strcmp(p, "dir") == 0)
-        p = strtok(NULL, delim);
+    char *p = argv[1];
+    if (p == NULL)
+    {
+        fprintf(stderr, "dir format: dir <directory>");
+        return 1;
+    }
     struct dirent *d;
     DIR *dh = opendir(p);
     if (!dh)
@@ -334,53 +417,61 @@ int sh_dir(char *str)
         if (errno == ENOENT)
         {
             perror("Directory doesn't exist");
+            return 1;
         }
         else
         {
             perror("unable to read directory");
+            return 1;
         }
     }
     while ((d = readdir(dh)) != NULL)
     {
-        FILE *fd = get_outfd_from_str();
-        fprintf(fd, d->d_name);
-        fprintf(fd, " ");
+        printf("%s", d->d_name);
+        printf(" ");
+    }
+    return 0;
+}
+
+int sh_echo(char **argv)
+{
+    panic_on(!strcmp(argv[0], "echo"), "Parsing Err");
+    if (argv[1])
+    {
+        printf("%s", argv[1]);
+        return 0;
+    }
+    else
+    {
+        perror("echo format: echo <comment>");
+        return 1;
     }
 }
 
-int sh_echo(char *str)
+int sh_exec(char **argv) // may have spaces in the front(used by sh_time)
 {
-    panic_on(str[0] != 'e' || str[1] != 'c' || str[2] != 'h' || str[3] != 'o' || str[4] != '\0', "Parsing Err");
-    FILE *fd = get_outfd_from_str();
-    fprintf(fd, str + 5);
-    fclose(fd);
-    return 1;
+    panic_on(!strcmp(argv[0], "exec"), "Parsing Err");
+    int aind = 1;
+    while (argv[aind])
+    {
+        execve(argv[aind], NULL, NULL);
+        aind++;
+    }
 }
 
-int sh_exec(char *str) // may have spaces in the front(used by sh_time)
+int sh_exit(char **argv)
 {
-    panic_on(str[0] != 'e' || str[1] != 'x' || str[2] != 'e' || str[3] != 'c' || str[4] != '\0', "Parsing Err");
-    char *delim = " ";
-    char *p;
-    p = strtok(str, delim);
-    p = strtok(NULL, delim);
-    execve(p, NULL, NULL);
-}
-
-int sh_exit(char *str)
-{
-    panic_on(str[0] != 'e' || str[1] != 'x' || str[2] != 'i' || str[3] != 't' || str[4] != '\0', "Parsing Err");
+    panic_on(!strcmp(argv[0], "exit"), "Parsing Err");
     exit(0);
 }
 
-int sh_fg(char *str)
+int sh_fg(char **argv)
 {
-    panic_on(str[0] != 'f' || str[1] != 'g' || str[2] != '\0', "Parsing Err");
+    panic_on(!strcmp(argv[0], "fg"), "Parsing Err");
     char *delim = " ";
-    char *p;
-    p = strtok(str, delim);
-    p = strtok(NULL, delim);
-    int job_num = strtol(p, NULL, 0);
+    char *p = argv[0];
+
+    int job_num = atoi(argv[1]);
     if (job_num <= 0)
     {
         fprintf(stderr, "Could not bring process to foreground: Invalid job number.\n");
@@ -408,100 +499,131 @@ int sh_fg(char *str)
 const char help_message[] = {
     "Usage: blablabla\n"};
 
-int sh_help(char *str)
+int sh_help(char **argv)
 {
-    panic_on(str[0] != 'h' || str[1] != 'e' || str[2] != 'l' || str[3] != 'p' || str[4] != '\0', "Parsing Err");
-    FILE *fd = get_outfd_from_str();
-    fprintf(fd, help_message);
-    fclose(fd);
+    panic_on(!strcmp(argv[0], "help"), "Parsing Err");
+    printf("%s", help_message);
     return 1;
 }
 
 const char *pstatus[] = {
     "DEAD", "ALIVE", "STOPPED"};
 
-int sh_jobs(char *str)
+int sh_jobs(char **argv)
 {
-    FILE *fd = get_outfd_from_str();
+    panic_on(!strcmp(argv[0], "jobs"), "Parsing Err");
     for (int i = 0; i < MAX_JOB; ++i)
     {
-        if (childProcessPool[i].status == PALIVE)
+        if (childProcessPool[i].status == PALIVE || childProcessPool[i].status == PSUSPEND)
         {
-            fprintf(fd, "%d | %s | %s\n", childProcessPool[i].pid, childProcessPool[i].pname, pstatus[childProcessPool[i].status]);
+            printf("[%d] %d | %s | %s\n", childProcessPool[i].pid, childProcessPool[i].pname, pstatus[childProcessPool[i].status]);
         }
     }
-    fclose(fd);
     return 1;
 }
 
-int sh_pwd(char *str)
+int sh_pwd(char **argv)
 {
+    panic_on(!strcmp(argv[0], "pwd"), "Parsing Err");
     char path[128];
     getcwd(path, 128);
-    FILE *fd = get_outfd_from_str();
-    fprintf(fd, "%s\n", path);
-    fclose(fd);
+    printf("%s\n", path);
     return 1;
 }
 
-int sh_set(char *str){
-  extern char **environ;
-  for (char **env = environ; *env; ++env)
-      printf("%s\n", *env);
-
+int sh_set(char **argv)
+{
+    TODO();
+    extern char **environ;
+    for (char **env = environ; *env; ++env)
+        printf("%s\n", *env);
 }
 
-int sh_time(char *str)
+int sh_time(char **argv)
 {
-    int pid = fork();
-    if (pid == 0)
-    {
-        struct timeval val1, val2;
-        int ret = gettimeofday(&val1, NULL);
-        if (ret == -1)
-        {
-            perror("Err: gettimeofday\n");
-            exit(1);
-        }
+    panic_on(!strcmp(argv[0], "time"), "Parsing Err");
+    time_t t = time(NULL);
+    printf("\n Current date and time is : %s", ctime(&t));
 
-        int cpid = fork();
-        if (cpid == 0)
-        {
-            // exec the file chosen
-            sh_exec(str + 5);
-            exit(0);
-            panic_on(1, "Should not reach here\n");
-        }
-        else if (cpid > 0)
-        {
-            waitpid(cpid, NULL, 0);
-            int ret = gettimeofday(&val2, NULL);
-            if (ret == -1)
-            {
-                perror("Err: gettimeofday\n");
-                exit(1);
-            }
-            unsigned long totaltime = val1.tv_sec * 1000000 + val1.tv_usec - (val2.tv_sec * 1000000 + val2.tv_usec);
-            FILE *fd = get_outfd_from_str(fd);
-            fprintf(fd, "%ld\n", totaltime);
-            fclose(fd);
-            exit(0);
-        }
-        else
-        {
-            perror("Fork Err");
-            exit(1);
-        }
-    }
-    else if (pid > 0)
+    // inappropriate code: code below shows the process time
+    //
+    // int pid = fork();
+    // if (pid == 0)
+    // {
+    //     struct timeval val1, val2;
+    //     int ret = gettimeofday(&val1, NULL);
+    //     if (ret == -1)
+    //     {
+    //         perror("Err: gettimeofday\n");
+    //         exit(1);
+    //     }
+
+    //     int cpid = fork();
+    //     if (cpid == 0)
+    //     {
+    //         // exec the file chosen
+    //         sh_exec(str + 5);
+    //         exit(0);
+    //         panic_on(1, "Should not reach here\n");
+    //     }
+    //     else if (cpid > 0)
+    //     {
+    //         waitpid(cpid, NULL, 0);
+    //         int ret = gettimeofday(&val2, NULL);
+    //         if (ret == -1)
+    //         {
+    //             perror("Err: gettimeofday\n");
+    //             exit(1);
+    //         }
+    //         unsigned long totaltime = val1.tv_sec * 1000000 + val1.tv_usec - (val2.tv_sec * 1000000 + val2.tv_usec);
+    //         FILE *fd = get_outfd_from_str(fd);
+    //         fprintf(fd, "%ld\n", totaltime);
+    //         fclose(fd);
+    //         exit(0);
+    //     }
+    //     else
+    //     {
+    //         perror("Fork Err");
+    //         exit(1);
+    //     }
+    // }
+    // else if (pid > 0)
+    // {
+    //     waitpid(pid, NULL, 0);
+    //     return 1;
+    // }
+    // else
+    // {
+    //     panic_on(1, "Fork Err");
+    // }
+}
+
+int sh_umask(char **argv)
+{
+    panic_on(!strcmp(argv[0], "umask"), "Parsing Err");
+    if (!argv[1])
     {
-        waitpid(pid, NULL, 0);
+        mode_t temp;
+        temp = umask(0);
+        umask(temp);
+        printf("%04d\n", temp);
+        return 0;
+    }
+    if (strlen(argv[1]) > 4)
+    {
+        perror("umask [umask_code]: umask_code need 1 to 4 bit number");
         return 1;
     }
-    else
+    char *invalidDigit = "89";
+    char *p = argv[1];
+    for (; *p != '\0'; p++)
     {
-        panic_on(1, "Fork Err");
+        if (strchr(invalidDigit, *p))
+        {
+            perror("umask [umask_code]: umask_code need digit valued 0 to 7");
+            return 1;
+        }
     }
+    unsigned int mask = atoi(argv[1]) % 1000;
+    umask(mask);
 }
-
-int sh_umask(char *str);

@@ -2,6 +2,7 @@
     "files.associations": {
         "features.h": "c",
         "dirent.h": "c",
-        "parser.h": "c"
+        "parser.h": "c",
+        "string.h": "c"
     }
 }
