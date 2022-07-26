@@ -56,11 +56,6 @@ enum
     SH_UMASK
 };
 
-struct foregroundprocess
-{
-    int pid;
-    char *pname;
-} FG;
 int sh_bg(char **argv);
 int sh_cd(char **argv);
 int sh_clr(char **argv);
@@ -114,6 +109,11 @@ struct icmd innercmd[] = {
     [SH_UMASK]
     { "umask", sh_umask }};
 
+struct foregroundprocess
+{
+    int pid;
+    char *pname;
+} FG;
 enum PSTATUS
 {
     PDEAD,
@@ -131,6 +131,12 @@ struct globalConfig
 {
     int termMode_;
 } P;
+struct environmentvariable
+{
+    char *shell;
+    char *parent;
+    char *directory;
+} E;
 
 /*Teiminal*/
 static struct termios termios_Orig;
@@ -138,6 +144,13 @@ static struct termios termios_Editor;
 /*Signal handler*/
 struct sigaction osig;
 struct sigaction nsig;
+
+void initEnvironmentVariable()
+{
+    char *path = (char *)malloc(sizeof(char) * 128);
+    getcwd(path, 128);
+    E.directory = path;
+}
 void hSIGCHLD(int sig_no, siginfo_t *info, void *vcontext)
 {
     pid_t pid = info->si_pid;
@@ -180,12 +193,6 @@ void initsig()
     signal(SIGSTOP, hSIGTSTP);
 }
 
-struct environmentvariable
-{
-    char *shell;
-    char *parent;
-    char *directory;
-} E;
 /*将shell终端恢复原设置*/
 void disableTerminalSettings()
 {
@@ -224,6 +231,7 @@ int sConfigInit()
         childProcessPool[i].status = PDEAD;
     }
     P.termMode_ = 0;
+    initsig();
 }
 
 int getcmd(char *buf, int nbuf)
@@ -544,58 +552,6 @@ int sh_time(char **argv)
     panic_on(!strcmp(argv[0], "time"), "Parsing Err");
     time_t t = time(NULL);
     printf("\n Current date and time is : %s", ctime(&t));
-
-    // inappropriate code: code below shows the process time
-    //
-    // int pid = fork();
-    // if (pid == 0)
-    // {
-    //     struct timeval val1, val2;
-    //     int ret = gettimeofday(&val1, NULL);
-    //     if (ret == -1)
-    //     {
-    //         perror("Err: gettimeofday\n");
-    //         exit(1);
-    //     }
-
-    //     int cpid = fork();
-    //     if (cpid == 0)
-    //     {
-    //         // exec the file chosen
-    //         sh_exec(str + 5);
-    //         exit(0);
-    //         panic_on(1, "Should not reach here\n");
-    //     }
-    //     else if (cpid > 0)
-    //     {
-    //         waitpid(cpid, NULL, 0);
-    //         int ret = gettimeofday(&val2, NULL);
-    //         if (ret == -1)
-    //         {
-    //             perror("Err: gettimeofday\n");
-    //             exit(1);
-    //         }
-    //         unsigned long totaltime = val1.tv_sec * 1000000 + val1.tv_usec - (val2.tv_sec * 1000000 + val2.tv_usec);
-    //         FILE *fd = get_outfd_from_str(fd);
-    //         fprintf(fd, "%ld\n", totaltime);
-    //         fclose(fd);
-    //         exit(0);
-    //     }
-    //     else
-    //     {
-    //         perror("Fork Err");
-    //         exit(1);
-    //     }
-    // }
-    // else if (pid > 0)
-    // {
-    //     waitpid(pid, NULL, 0);
-    //     return 1;
-    // }
-    // else
-    // {
-    //     panic_on(1, "Fork Err");
-    // }
 }
 
 int sh_umask(char **argv)
