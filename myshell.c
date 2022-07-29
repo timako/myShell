@@ -1,22 +1,65 @@
 #include <stdio.h>
 #include <string.h>
-#include <fcntl.h>
+#include <stdlib.h>
 #include <stdarg.h>
 #include <stddef.h>
+#include <stdbool.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <time.h>
 #include <errno.h>
-#include <stdbool.h>
 #include <termios.h>
 #include <dirent.h>
 #include <assert.h>
-#include <parser.h>
 #include <sys/syscall.h>
 #include <sys/signal.h>
 #include <sys/time.h>
 #include <sys/stat.h>
-
 #include <sys/wait.h>
+
+/*parse part*/
+#define BUILT_IN_COMMAND_NUM (15)
+char *BUILT_IN_COMMAND[BUILT_IN_COMMAND_NUM] = {"bg", "cd", "clr", "dir", "echo", "exec", "exit", "fg", "help", "jobs", "pwd", "time", "set", "umask", "test"};
+char whitespace[] = " \t\r\n\v";
+char symbols[] = "<|>&;()";
+
+char *ifile, ofile;
+int imode, omode;
+int bgmode;
+
+#define MAX_CMD_PHASE_NUM (100)
+
+int splitcmd(char *cmd, char **arr);
+char **parsecmd(char **arr);
+int runcmd();
+// return jobid;
+int addjob(int pid, char *pname, int pstatus);
+// return jobid;
+int deljob(int pid);
+char *strchr(const char *s, int c)
+{
+    for (; *s; s++)
+    {
+        if (*s == c)
+            return (char *)s;
+    }
+    return NULL;
+}
+int strin(char **arr, int len, char *target)
+{
+    int i;
+    for (i = 0; i < len; i++)
+    {
+        if (strncmp(arr[i], target, strlen(target)) == 0)
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
+/*parse part end*/
+
+/*test part*/
 #define MAX_JOB 100
 #define TEST_MODE
 
@@ -37,7 +80,7 @@
 #endif
 
 #define TODO() panic_on(1, "Please implement me");
-
+/*test part end*/
 enum
 {
     SH_BG = 1,
@@ -53,7 +96,8 @@ enum
     SH_PWD,
     SH_SET,
     SH_TIME,
-    SH_UMASK
+    SH_UMASK,
+    SH_TEST
 };
 
 int sh_bg(char **argv);
@@ -70,8 +114,9 @@ int sh_pwd(char **argv);
 int sh_set(char **argv);
 int sh_time(char **argv);
 int sh_umask(char **argv);
+int sh_test(char **argv);
 
-typedef int (*handler)(char *);
+typedef int (*handler)(char **);
 
 /*inner cmd*/
 struct icmd
@@ -99,7 +144,7 @@ struct icmd innercmd[] = {
     [SH_HELP]
     { "help", sh_help },
     [SH_JOBS]
-    { "childProcessPool", sh_jobs },
+    { "jobs", sh_jobs },
     [SH_PWD]
     { "pwd", sh_pwd },
     [SH_SET]
@@ -107,8 +152,42 @@ struct icmd innercmd[] = {
     [SH_TIME]
     { "time", sh_time },
     [SH_UMASK]
-    { "umask", sh_umask }};
-
+    { "umask", sh_umask },
+    [SH_TEST]
+    { "test", sh_test }};
+int cmd2index(char *cmd)
+{
+    if (!strcmp(cmd, "bg"))
+        return SH_BG;
+    if (!strcmp(cmd, "cd"))
+        return SH_CD;
+    if (!strcmp(cmd, "clr"))
+        return SH_CLR;
+    if (!strcmp(cmd, "dir"))
+        return SH_DIR;
+    if (!strcmp(cmd, "echo"))
+        return SH_ECHO;
+    if (!strcmp(cmd, "exec"))
+        return SH_EXEC;
+    if (!strcmp(cmd, "exit"))
+        return SH_EXIT;
+    if (!strcmp(cmd, "fg"))
+        return SH_FG;
+    if (!strcmp(cmd, "help"))
+        return SH_HELP;
+    if (!strcmp(cmd, "jobs"))
+        return SH_JOBS;
+    if (!strcmp(cmd, "pwd"))
+        return SH_PWD;
+    if (!strcmp(cmd, "set"))
+        return SH_SET;
+    if (!strcmp(cmd, "time"))
+        return SH_TIME;
+    if (!strcmp(cmd, "umask"))
+        return SH_UMASK;
+    if (!strcmp(cmd, "test"))
+        return SH_TEST;
+}
 struct foregroundprocess
 {
     int pid;
@@ -131,12 +210,6 @@ struct globalConfig
 {
     int termMode_;
 } P;
-struct environmentvariable
-{
-    char *shell;
-    char *parent;
-    char *directory;
-} E;
 
 /*Teiminal*/
 static struct termios termios_Orig;
@@ -145,11 +218,12 @@ static struct termios termios_Editor;
 struct sigaction osig;
 struct sigaction nsig;
 
-void initEnvironmentVariable()
+void initEnv()
 {
     char *path = (char *)malloc(sizeof(char) * 128);
     getcwd(path, 128);
-    E.directory = path;
+    putenv("shell");
+    setenv("shell", path, 1);
 }
 void hSIGCHLD(int sig_no, siginfo_t *info, void *vcontext)
 {
@@ -182,7 +256,7 @@ void hSIGTSTP(int sig_no)
     }
 }
 
-void initsig()
+void initSig()
 {
     memset(&nsig, 0, sizeof(nsig));
     nsig.sa_sigaction = hSIGCHLD;
@@ -231,7 +305,9 @@ int sConfigInit()
         childProcessPool[i].status = PDEAD;
     }
     P.termMode_ = 0;
-    initsig();
+    initSig();
+    initEnv();
+    return 0;
 }
 
 int getcmd(char *buf, int nbuf)
@@ -264,10 +340,12 @@ int parsebgmode(char *buf)
             break;
         }
     }
+    return 0;
 }
-extern int bgmode;
+
 int main()
 {
+    sConfigInit();
     char buf[512];
     while (getcmd(buf, 512))
     {
@@ -275,7 +353,7 @@ int main()
         int pid = fork();
         if (pid == 0)
         {
-            runcmd();
+            runcmd(buf);
             // panic_on(1, "Should not reach here");
         }
         else if (pid > 0)
@@ -317,6 +395,22 @@ void sigint()
     exit(0);
 }
 
+int checkIfConsistOfNum(char *str)
+{
+    char *p = str;
+    if (atoi(p) == 0)
+    {
+        int len = strlen(p);
+        for (int i = 0; i < len; i++)
+        {
+            if (p[i] > '9' || p[i] < '0')
+            {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
 int sh_bg(char **argv)
 {
     panic_on(!strcmp(argv[0], "bg"), "Parsing Err");
@@ -329,19 +423,7 @@ int sh_bg(char **argv)
     while (p != NULL)
     {
         jobid = atoi(p);
-        bool atoi_valid_flag = 1;
-        if (jobid == 0)
-        {
-            int len = strlen(p);
-            for (int i = 0; i < len; i++)
-            {
-                if (p[i] > '9' || p[i] < '0')
-                {
-                    atoi_valid_flag = 0;
-                    break;
-                }
-            }
-        }
+        bool atoi_valid_flag = checkIfConsistOfNum(p);
         if (atoi_valid_flag == 0)
         {
             perror("invalid usage. bg <jobid1> [jobid2] [jobid3]...");
@@ -541,10 +623,32 @@ int sh_pwd(char **argv)
 
 int sh_set(char **argv)
 {
-    TODO();
-    extern char **environ;
-    for (char **env = environ; *env; ++env)
-        printf("%s\n", *env);
+    panic_on(!strcmp(argv[0], "set"), "Parsing Err");
+    if (!argv[1])
+    {
+        extern char **environ;
+        for (int i = 0; environ[i] != NULL; i++)
+            printf("%s\n", environ[i]);
+        return 0;
+    }
+    else if (argv[1] && argv[2] && !argv[3])
+    {
+        char *env = getenv(argv[1]);
+        if (!env)
+        {
+            perror("env doesn't exist");
+        }
+        else
+        {
+            setenv(argv[1], argv[2], 1);
+        }
+        return 0;
+    }
+    else
+    {
+        perror("\"set\" need 0 or 2 parameters");
+        return 1;
+    }
 }
 
 int sh_time(char **argv)
@@ -552,6 +656,7 @@ int sh_time(char **argv)
     panic_on(!strcmp(argv[0], "time"), "Parsing Err");
     time_t t = time(NULL);
     printf("\n Current date and time is : %s", ctime(&t));
+    return 0;
 }
 
 int sh_umask(char **argv)
@@ -582,4 +687,320 @@ int sh_umask(char **argv)
     }
     unsigned int mask = atoi(argv[1]) % 1000;
     umask(mask);
+    return 0;
+}
+/*hard to implement bash test*/
+int sh_test(char **argv)
+{
+    panic_on(!strcmp(argv[0], "test"), "Parsing Err");
+    if (!argv[1] || !argv[2] || !argv[3] || argv[4])
+    {
+        perror("test accept 3 parameters");
+        return 1;
+    }
+    if (!strcmp(argv[2], "="))
+    {
+        if (!strcmp(argv[1], argv[3]))
+        {
+            printf("True");
+        }
+        else
+        {
+            print("False");
+        }
+    }
+    else if (!strcmp(argv[2], "!="))
+    {
+        if (strcmp(argv[1], argv[3]))
+        {
+            printf("True");
+        }
+        else
+        {
+            print("False");
+        }
+    }
+    else if (!strcmp(argv[2], "-eq"))
+    {
+        if (checkIfConsistOfNum(argv[1]) && checkIfConsistOfNum(argv[3]) && atoi(argv[1]) == atoi(argv[3]))
+        {
+            printf("True");
+        }
+        else
+        {
+            print("False");
+        }
+    }
+    else if (!strcmp(argv[2], "-ne"))
+    {
+        if (checkIfConsistOfNum(argv[1]) &&
+            checkIfConsistOfNum(argv[3]) &&
+            atoi(argv[1]) != atoi(argv[3]))
+        {
+            printf("True");
+        }
+        else
+        {
+            print("False");
+        }
+    }
+    else if (!strcmp(argv[2], "-gt"))
+    {
+        if (checkIfConsistOfNum(argv[1]) &&
+            checkIfConsistOfNum(argv[3]) &&
+            atoi(argv[1]) > atoi(argv[3]))
+        {
+            printf("True");
+        }
+        else
+        {
+            print("False");
+        }
+    }
+    else if (!strcmp(argv[2], "-ge"))
+    {
+        if (checkIfConsistOfNum(argv[1]) &&
+            checkIfConsistOfNum(argv[3]) &&
+            (atoi(argv[1]) > atoi(argv[3]) ||
+             atoi(argv[1]) == atoi(argv[3])))
+        {
+            printf("True");
+        }
+        else
+        {
+            print("False");
+        }
+    }
+    else if (!strcmp(argv[2], "-lt"))
+    {
+        if (checkIfConsistOfNum(argv[1]) &&
+            checkIfConsistOfNum(argv[3]) &&
+            atoi(argv[1]) < atoi(argv[3]))
+        {
+            printf("True");
+        }
+        else
+        {
+            print("False");
+        }
+    }
+    else if (!strcmp(argv[2], "-le"))
+    {
+        if (checkIfConsistOfNum(argv[1]) &&
+            checkIfConsistOfNum(argv[3]) &&
+            (atoi(argv[1]) < atoi(argv[3]) ||
+             atoi(argv[1]) == atoi(argv[3])))
+        {
+            printf("True");
+        }
+        else
+        {
+            print("False");
+        }
+    }
+    return 0;
+}
+int addjob(int pid, char *pname, int pstatus)
+{
+    for (int i = 0; i < MAX_JOB; i++)
+    {
+        if (childProcessPool[i].status == PDEAD)
+        {
+            childProcessPool[i].pid = pid;
+            childProcessPool[i].pname = pname;
+            childProcessPool[i].status = PALIVE;
+        }
+    }
+}
+// return jobid;
+int deljob(int pid)
+{
+    for (int i = 0; i < MAX_JOB; i++)
+    {
+        if (childProcessPool[i].pid == pid)
+        {
+            childProcessPool[i].pid = -1;
+            childProcessPool[i].pname = "";
+            childProcessPool[i].status = PDEAD;
+        }
+    }
+}
+
+int runcmd(char *str)
+{
+    char *start = str;
+    for (; *str; str++)
+    {
+        if ((*str == '|') && (*(str - 1) == ' ') && (*(str + 1) == ' '))
+        {
+            *str = '\0';
+            int p[2];
+            int pid;
+            pipe(p);
+            if ((pid = fork()) == 0)
+            {
+                close(1); // stdout
+                dup(p[1]);
+                close(p[0]);
+                close(p[1]);
+                runRawcmd(start);
+            }
+            if ((pid = fork()) == 0)
+            {
+                close(0);
+                dup(p[0]);
+                close(p[0]);
+                close(p[1]);
+                runcmd(str + 1);
+            }
+            close(p[0]);
+            close(p[1]);
+            wait(NULL);
+            wait(NULL);
+            return 0;
+        }
+    }
+    runRawcmd(start);
+    return 0;
+}
+
+int runRawcmd(char *cmd)
+{
+    // if ( cmd contains internal cmd ){
+    //   call related cmd;
+    // }
+    // else {
+    //   deal with &
+    //   deal with redircmd
+    //   parse argv
+    //   execvp
+    // }
+    char *arr[MAX_CMD_PHASE_NUM];
+    int argc = splitcmd(cmd, arr);
+    char **argv = parsecmd(arr);
+    if (!argv[0])
+    {
+        perror("empty command!");
+    }
+    else
+    {
+        if (imode == 1)
+        {
+            int fileFd = 0;
+            fileFd = open(ifile, O_RDONLY, 0666);
+            if (dup2(fileFd, fileno(stdin)) == -1)
+                fprintf(stderr, "dup2 failed!\n");
+            close(fileFd);
+        }
+        if (omode == 1)
+        {
+            int fileFd = 0;
+            fileFd = open(ofile, O_RDWR | O_CREAT | O_TRUNC, 0666);
+            if (dup2(fileFd, fileno(stdout)) == -1)
+                fprintf(stderr, "dup2() failed!\n");
+            close(fileFd);
+        }
+        if (omode == 2)
+        {
+            int fileFd = 0;
+            fileFd = open(ofile, O_RDWR | O_CREAT | O_APPEND, 0666);
+            if (dup2(fileFd, fileno(stdout)) == -1)
+                fprintf(stderr, "dup2() failed!\n");
+            close(fileFd);
+        }
+        if (strin(argv[0], BUILT_IN_COMMAND_NUM, BUILT_IN_COMMAND))
+        {
+            innercmd[cmd2index(cmd)].handler(argv);
+        }
+        else
+        {
+        }
+    }
+}
+int splitcmd(char *cmd, char **arr)
+{
+    char *p = cmd;
+    for (int i = 0; i < MAX_CMD_PHASE_NUM; i++)
+    {
+        arr[i] = NULL;
+    }
+    if (arr[0] = strtok(p, whitespace) == NULL)
+        return 1;
+    int argc = 1;
+    while (argc < MAX_CMD_PHASE_NUM)
+    {
+        if (arr[argc] = strtok(p, NULL) == NULL)
+            return argc;
+        argc++;
+    }
+}
+char **parsecmd(char **arr)
+{
+    ifile = NULL;
+    ofile = NULL;
+    imode = omode = 0;
+    char *argv[MAX_CMD_PHASE_NUM];
+    for (int i = 0; i < MAX_CMD_PHASE_NUM; i++)
+    {
+        argv[i] = NULL;
+    }
+    int vind = 0;
+    int aind = 0;
+    int state = 0; // 0:普通模式 1:等待读入文件名模式 2:等待输出文件名模式
+    while (aind < MAX_CMD_PHASE_NUM)
+    {
+        if (strlen(arr[aind]) == 1 && strchr(symbols, &arr[aind]))
+        {
+            char symb = &arr[aind];
+            if (state == 0)
+            {
+                if (symb == '<')
+                {
+                    state = 1;
+                    imode = 1;
+                }
+                else if (symb == '>')
+                {
+                    state = 2;
+                    omode = 1;
+                }
+                else
+                {
+                    printf("Not support yet");
+                }
+                aind++;
+            }
+            else
+            {
+                print("Invalid syntax!");
+            }
+        }
+        else if (!strcmp(arr[aind], ">>"))
+        {
+            state = 2;
+            omode = 2;
+            aind++;
+        }
+        else // argv or filename
+        {
+            if (state == 0)
+            {
+                argv[vind] = arr[aind];
+                vind++;
+                aind++;
+            }
+            else if (state == 1)
+            {
+                ifile = arr[aind];
+                aind++;
+                state = 0;
+            }
+            else if (state == 2)
+            {
+                ofile = arr[aind];
+                aind++;
+                state = 0;
+            }
+        }
+    }
 }
