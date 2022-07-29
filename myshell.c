@@ -23,15 +23,18 @@ char *BUILT_IN_COMMAND[BUILT_IN_COMMAND_NUM] = {"bg", "cd", "clr", "dir", "echo"
 char whitespace[] = " \t\r\n\v";
 char symbols[] = "<|>&;()";
 
-char *ifile, ofile;
+char ifile[1024], ofile[1024];
 int imode, omode;
 int bgmode;
 
 #define MAX_CMD_PHASE_NUM (100)
 
 int splitcmd(char *cmd, char **arr);
+
 char **parsecmd(char **arr);
 int runcmd();
+int runRawcmd(char *cmd);
+
 // return jobid;
 int addjob(int pid, char *pname, int pstatus);
 // return jobid;
@@ -45,7 +48,7 @@ char *strchr(const char *s, int c)
     }
     return NULL;
 }
-int strin(char **arr, int len, char *target)
+int strin(char *arr[], int len, char *target)
 {
     int i;
     for (i = 0; i < len; i++)
@@ -544,7 +547,9 @@ int sh_exec(char **argv) // may have spaces in the front(used by sh_time)
     int aind = 1;
     while (argv[aind])
     {
-        execve(argv[aind], NULL, NULL);
+        char *const args[] = {NULL};
+        char *const env[] = {NULL};
+        execve(argv[aind], args, env);
         aind++;
     }
 }
@@ -560,16 +565,16 @@ int sh_fg(char **argv)
     panic_on(!strcmp(argv[0], "fg"), "Parsing Err");
     char *delim = " ";
     char *p = argv[0];
-
     int job_num = atoi(argv[1]);
     if (job_num <= 0)
     {
         fprintf(stderr, "Could not bring process to foreground: Invalid job number.\n");
-        return;
+        return 1;
     }
     if (childProcessPool[job_num].status == PDEAD)
     {
         perror("nonexistent or dead process");
+        return 1;
     }
     else
     {
@@ -584,6 +589,7 @@ int sh_fg(char **argv)
         signal(SIGTTIN, SIG_DFL);
         signal(SIGTTOU, SIG_DFL);
     }
+    return 0;
 }
 
 const char help_message[] = {
@@ -606,7 +612,7 @@ int sh_jobs(char **argv)
     {
         if (childProcessPool[i].status == PALIVE || childProcessPool[i].status == PSUSPEND)
         {
-            printf("[%d] %d | %s | %s\n", childProcessPool[i].pid, childProcessPool[i].pname, pstatus[childProcessPool[i].status]);
+            printf("[%d] %d | %s | %s\n", i, childProcessPool[i].pid, childProcessPool[i].pname, pstatus[childProcessPool[i].status]);
         }
     }
     return 1;
@@ -706,7 +712,7 @@ int sh_test(char **argv)
         }
         else
         {
-            print("False");
+            printf("False");
         }
     }
     else if (!strcmp(argv[2], "!="))
@@ -717,7 +723,7 @@ int sh_test(char **argv)
         }
         else
         {
-            print("False");
+            printf("False");
         }
     }
     else if (!strcmp(argv[2], "-eq"))
@@ -728,7 +734,7 @@ int sh_test(char **argv)
         }
         else
         {
-            print("False");
+            printf("False");
         }
     }
     else if (!strcmp(argv[2], "-ne"))
@@ -741,7 +747,7 @@ int sh_test(char **argv)
         }
         else
         {
-            print("False");
+            printf("False");
         }
     }
     else if (!strcmp(argv[2], "-gt"))
@@ -754,7 +760,7 @@ int sh_test(char **argv)
         }
         else
         {
-            print("False");
+            printf("False");
         }
     }
     else if (!strcmp(argv[2], "-ge"))
@@ -768,7 +774,7 @@ int sh_test(char **argv)
         }
         else
         {
-            print("False");
+            printf("False");
         }
     }
     else if (!strcmp(argv[2], "-lt"))
@@ -781,7 +787,7 @@ int sh_test(char **argv)
         }
         else
         {
-            print("False");
+            printf("False");
         }
     }
     else if (!strcmp(argv[2], "-le"))
@@ -795,7 +801,7 @@ int sh_test(char **argv)
         }
         else
         {
-            print("False");
+            printf("False");
         }
     }
     return 0;
@@ -866,15 +872,6 @@ int runcmd(char *str)
 
 int runRawcmd(char *cmd)
 {
-    // if ( cmd contains internal cmd ){
-    //   call related cmd;
-    // }
-    // else {
-    //   deal with &
-    //   deal with redircmd
-    //   parse argv
-    //   execvp
-    // }
     char *arr[MAX_CMD_PHASE_NUM];
     int argc = splitcmd(cmd, arr);
     char **argv = parsecmd(arr);
@@ -908,12 +905,13 @@ int runRawcmd(char *cmd)
                 fprintf(stderr, "dup2() failed!\n");
             close(fileFd);
         }
-        if (strin(argv[0], BUILT_IN_COMMAND_NUM, BUILT_IN_COMMAND))
+        if (strin(BUILT_IN_COMMAND, BUILT_IN_COMMAND_NUM, argv[0]))
         {
             innercmd[cmd2index(cmd)].handler(argv);
         }
         else
         {
+            TODO();
         }
     }
 }
@@ -924,20 +922,20 @@ int splitcmd(char *cmd, char **arr)
     {
         arr[i] = NULL;
     }
-    if (arr[0] = strtok(p, whitespace) == NULL)
+    if ((arr[0] = strtok(p, whitespace)) == NULL)
         return 1;
     int argc = 1;
     while (argc < MAX_CMD_PHASE_NUM)
     {
-        if (arr[argc] = strtok(p, NULL) == NULL)
+        if ((arr[argc] = strtok(NULL, whitespace)) == NULL)
             return argc;
         argc++;
     }
 }
 char **parsecmd(char **arr)
 {
-    ifile = NULL;
-    ofile = NULL;
+    ifile[0] = '\0';
+    ofile[0] = '\0';
     imode = omode = 0;
     char *argv[MAX_CMD_PHASE_NUM];
     for (int i = 0; i < MAX_CMD_PHASE_NUM; i++)
@@ -949,9 +947,9 @@ char **parsecmd(char **arr)
     int state = 0; // 0:普通模式 1:等待读入文件名模式 2:等待输出文件名模式
     while (aind < MAX_CMD_PHASE_NUM)
     {
-        if (strlen(arr[aind]) == 1 && strchr(symbols, &arr[aind]))
+        if (strlen(arr[aind]) == 1 && strchr(symbols, *arr[aind]))
         {
-            char symb = &arr[aind];
+            char symb = *arr[aind];
             if (state == 0)
             {
                 if (symb == '<')
@@ -972,7 +970,7 @@ char **parsecmd(char **arr)
             }
             else
             {
-                print("Invalid syntax!");
+                printf("Invalid syntax!");
             }
         }
         else if (!strcmp(arr[aind], ">>"))
@@ -991,13 +989,13 @@ char **parsecmd(char **arr)
             }
             else if (state == 1)
             {
-                ifile = arr[aind];
+                strcpy(ifile, arr[aind]);
                 aind++;
                 state = 0;
             }
             else if (state == 2)
             {
-                ofile = arr[aind];
+                strcpy(ofile, arr[aind]);
                 aind++;
                 state = 0;
             }
