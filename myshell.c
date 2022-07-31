@@ -206,7 +206,7 @@ enum PSTATUS
 };
 struct childProcess
 {
-    char *pname;
+    char pname[105];
     int pid;
     int status;
 } childProcessPool[MAX_JOB];
@@ -244,7 +244,6 @@ void hSIGCHLD(int sig_no, siginfo_t *info, void *vcontext)
 
         if (i < MAX_JOB)
         {
-
             if (childProcessPool[i].status == PALIVE)
             {
                 printf("已完成 [%d] %d %s\n", i, pid, childProcessPool[i].pname);
@@ -309,7 +308,7 @@ int sConfigInit()
 {
     for (int i = 0; i < MAX_JOB; i++)
     {
-        childProcessPool[i].pname = "";
+        strcpy(childProcessPool[i].pname, "");
         childProcessPool[i].pid = 0;
         childProcessPool[i].status = PDEAD;
     }
@@ -840,7 +839,7 @@ int addjob(int pid, char *pname, int pstatus)
         if (childProcessPool[i].status == PDEAD)
         {
             childProcessPool[i].pid = pid;
-            childProcessPool[i].pname = pname;
+            strcpy(childProcessPool[i].pname, pname);
             childProcessPool[i].status = PALIVE;
             break;
         }
@@ -857,7 +856,7 @@ int deljob(int pid)
         if (childProcessPool[i].pid == pid)
         {
             childProcessPool[i].pid = -1;
-            childProcessPool[i].pname = "";
+            strcpy(childProcessPool[i].pname, "");
             childProcessPool[i].status = PDEAD;
         }
     }
