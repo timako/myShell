@@ -30,7 +30,6 @@ int bgmode;
 #define MAX_CMD_PHASE_NUM (100)
 
 int splitcmd(char *cmd, char **arr);
-
 char **parsecmd(char **arr);
 int runcmd();
 int runRawcmd(char *cmd);
@@ -108,11 +107,13 @@ int sh_cd(char **argv);
 int sh_clr(char **argv);
 int sh_dir(char **argv);
 int sh_echo(char **argv);
+
 int sh_exec(char **argv);
 int sh_exit(char **argv);
 int sh_fg(char **argv);
 int sh_help(char **argv);
 int sh_jobs(char **argv);
+
 int sh_pwd(char **argv);
 int sh_set(char **argv);
 int sh_time(char **argv);
@@ -190,11 +191,12 @@ int cmd2index(char *cmd)
         return SH_UMASK;
     if (!strcmp(cmd, "test"))
         return SH_TEST;
+    return 0;
 }
 struct foregroundprocess
 {
     int pid;
-    char *pname;
+    char pname[1005];
 } FG;
 enum PSTATUS
 {
@@ -232,19 +234,23 @@ void hSIGCHLD(int sig_no, siginfo_t *info, void *vcontext)
 {
     pid_t pid = info->si_pid;
     int i;
-    for (i = 0; i < MAX_JOB; i++)
+    if (!!bgmode)
     {
-        if (pid == childProcessPool[i].pid)
-            break;
-    }
-
-    if (i < MAX_JOB)
-    {
-
-        if (childProcessPool[i].status == PALIVE)
+        for (i = 0; i < MAX_JOB; i++)
         {
-            childProcessPool[i].status = PDEAD;
-            deljob(pid);
+            if (pid == childProcessPool[i].pid)
+                break;
+        }
+
+        if (i < MAX_JOB)
+        {
+
+            if (childProcessPool[i].status == PALIVE)
+            {
+                printf("已完成 [%d] %d %s\n", i, pid, childProcessPool[i].pname);
+                childProcessPool[i].status = PDEAD;
+                deljob(pid);
+            }
         }
     }
 }
@@ -255,7 +261,7 @@ void hSIGTSTP(int sig_no)
         addjob(FG.pid, FG.pname, PSUSPEND);
         kill(FG.pid, SIGSTOP);
         FG.pid = -1;
-        FG.pname = NULL;
+        strcpy(FG.pname, "");
     }
 }
 
@@ -303,7 +309,7 @@ int sConfigInit()
 {
     for (int i = 0; i < MAX_JOB; i++)
     {
-        strcpy(childProcessPool[i].pname, "");
+        childProcessPool[i].pname = "";
         childProcessPool[i].pid = 0;
         childProcessPool[i].status = PDEAD;
     }
@@ -340,7 +346,7 @@ int parsebgmode(char *buf)
         {
             bgmode = 1;
             *p = '\0';
-            break;
+            return 1;
         }
     }
     return 0;
@@ -350,33 +356,51 @@ int main()
 {
     sConfigInit();
     char buf[512];
-    while (getcmd(buf, 512))
+    setbuf(stdout, NULL);
+    while (getcmd(buf, 512) == 0)
     {
-        bgmode = parsebgmode(buf);
-        int pid = fork();
-        if (pid == 0)
+        if (buf[0] == 'c' && buf[1] == 'd' && buf[2] == ' ')
         {
-            runcmd(buf);
-            // panic_on(1, "Should not reach here");
-        }
-        else if (pid > 0)
-        {
-            if (!!bgmode)
+            buf[strlen(buf) - 1] = 0;
+            if (syscall(SYS_chdir, buf + 3) < 0)
             {
-                int jobid = addjob(pid, buf, PALIVE);
-                printf("[%d] %d\n", jobid, pid);
+                fprintf(stderr, "cannot cd %s\n", buf + 3);
+                return 1;
             }
-            else
-            {
-                FG.pid = pid;
-                strcpy(FG.pname, buf);
-            }
-            waitpid(pid, NULL, (!!bgmode) ? WNOHANG : WUNTRACED);
-            continue;
         }
         else
         {
-            panic_on(1, "Fork Err");
+            bgmode = parsebgmode(buf);
+            int pid = fork();
+            if (pid == 0)
+            {
+                runcmd(buf);
+                exit(0);
+            }
+            else if (pid > 0)
+            {
+                if (!!bgmode)
+                {
+                    int jobid = addjob(pid, buf, PALIVE);
+                    printf("[%d] %d\n", jobid, pid);
+                }
+                else
+                {
+                    FG.pid = pid;
+                    strcpy(FG.pname, buf);
+                }
+                waitpid(pid, NULL, (!!bgmode) ? WNOHANG : WUNTRACED);
+                if (!bgmode)
+                {
+                    FG.pid = -1;
+                    strcpy(FG.pname, "");
+                }
+                continue;
+            }
+            else
+            {
+                panic_on(1, "Fork Err");
+            }
         }
     }
 }
@@ -416,8 +440,7 @@ int checkIfConsistOfNum(char *str)
 }
 int sh_bg(char **argv)
 {
-    panic_on(!strcmp(argv[0], "bg"), "Parsing Err");
-    char *delim = " ";
+    panic_on(strcmp(argv[0], "bg"), "Parsing Err");
     char *p;
     int jobid;
     /*check all paras*/
@@ -461,7 +484,7 @@ int sh_bg(char **argv)
 int sh_cd(char **argv)
 {
 
-    panic_on(!strcmp(argv[0], "cd"), "Parsing Err");
+    panic_on(strcmp(argv[0], "cd"), "Parsing Err");
     if (argv[1] != NULL)
     {
         if (syscall(SYS_chdir, argv[1]) < 0)
@@ -481,10 +504,13 @@ int sh_cd(char **argv)
 
 int sh_clr(char **argv)
 {
-    panic_on(!strcmp(argv[0], "clr"), "Parsing Err");
-    if (argv[1] != NULL)
+    panic_on(strcmp(argv[0], "clr"), "Parsing Err");
+    if (argv[0] != NULL)
     {
-        write(STDOUT_FILENO, "\x1b[2J", 4);
+        // move cursor to (1,1) and clear the console
+        const char *CLEAR_SCREEN_ANSI = "\e[1;1H\e[2J";
+        write(STDOUT_FILENO, CLEAR_SCREEN_ANSI, 12);
+        // write(STDOUT_FILENO, "\x1b[2J", 4);
         return 0;
     }
     else
@@ -495,8 +521,7 @@ int sh_clr(char **argv)
 }
 int sh_dir(char **argv)
 {
-    panic_on(!strcmp(argv[0], "dir"), "Parsing Err");
-    char *delim = " ";
+    panic_on(strcmp(argv[0], "dir"), "Parsing Err");
     char *p = argv[1];
     if (p == NULL)
     {
@@ -521,29 +546,30 @@ int sh_dir(char **argv)
     while ((d = readdir(dh)) != NULL)
     {
         printf("%s", d->d_name);
-        printf(" ");
+        printf("  ");
     }
+    printf("\n");
     return 0;
 }
 
 int sh_echo(char **argv)
 {
-    panic_on(!strcmp(argv[0], "echo"), "Parsing Err");
+    panic_on(strcmp(argv[0], "echo"), "Parsing Err");
     if (argv[1])
     {
-        printf("%s", argv[1]);
+        printf("%s\n", argv[1]);
         return 0;
     }
     else
     {
-        perror("echo format: echo <comment>");
+        perror("echo format: echo <comment>\n");
         return 1;
     }
 }
 
 int sh_exec(char **argv) // may have spaces in the front(used by sh_time)
 {
-    panic_on(!strcmp(argv[0], "exec"), "Parsing Err");
+    panic_on(strcmp(argv[0], "exec"), "Parsing Err");
     int aind = 1;
     while (argv[aind])
     {
@@ -552,21 +578,21 @@ int sh_exec(char **argv) // may have spaces in the front(used by sh_time)
         execve(argv[aind], args, env);
         aind++;
     }
+    return 0;
 }
 
 int sh_exit(char **argv)
 {
-    panic_on(!strcmp(argv[0], "exit"), "Parsing Err");
+    panic_on(strcmp(argv[0], "exit"), "Parsing Err");
+    kill(getppid(), 9);
     exit(0);
 }
 
 int sh_fg(char **argv)
 {
-    panic_on(!strcmp(argv[0], "fg"), "Parsing Err");
-    char *delim = " ";
-    char *p = argv[0];
+    panic_on(strcmp(argv[0], "fg"), "Parsing Err");
     int job_num = atoi(argv[1]);
-    if (job_num <= 0)
+    if (job_num < 0)
     {
         fprintf(stderr, "Could not bring process to foreground: Invalid job number.\n");
         return 1;
@@ -597,7 +623,7 @@ const char help_message[] = {
 
 int sh_help(char **argv)
 {
-    panic_on(!strcmp(argv[0], "help"), "Parsing Err");
+    panic_on(strcmp(argv[0], "help"), "Parsing Err");
     printf("%s", help_message);
     return 1;
 }
@@ -607,7 +633,7 @@ const char *pstatus[] = {
 
 int sh_jobs(char **argv)
 {
-    panic_on(!strcmp(argv[0], "jobs"), "Parsing Err");
+    panic_on(strcmp(argv[0], "jobs"), "Parsing Err");
     for (int i = 0; i < MAX_JOB; ++i)
     {
         if (childProcessPool[i].status == PALIVE || childProcessPool[i].status == PSUSPEND)
@@ -620,7 +646,7 @@ int sh_jobs(char **argv)
 
 int sh_pwd(char **argv)
 {
-    panic_on(!strcmp(argv[0], "pwd"), "Parsing Err");
+    panic_on(strcmp(argv[0], "pwd"), "Parsing Err");
     char path[128];
     getcwd(path, 128);
     printf("%s\n", path);
@@ -629,7 +655,7 @@ int sh_pwd(char **argv)
 
 int sh_set(char **argv)
 {
-    panic_on(!strcmp(argv[0], "set"), "Parsing Err");
+    panic_on(strcmp(argv[0], "set"), "Parsing Err");
     if (!argv[1])
     {
         extern char **environ;
@@ -659,15 +685,15 @@ int sh_set(char **argv)
 
 int sh_time(char **argv)
 {
-    panic_on(!strcmp(argv[0], "time"), "Parsing Err");
+    panic_on(strcmp(argv[0], "time"), "Parsing Err");
     time_t t = time(NULL);
-    printf("\n Current date and time is : %s", ctime(&t));
+    printf("Current date and time is : %s", ctime(&t));
     return 0;
 }
 
 int sh_umask(char **argv)
 {
-    panic_on(!strcmp(argv[0], "umask"), "Parsing Err");
+    panic_on(strcmp(argv[0], "umask"), "Parsing Err");
     if (!argv[1])
     {
         mode_t temp;
@@ -698,43 +724,43 @@ int sh_umask(char **argv)
 /*hard to implement bash test*/
 int sh_test(char **argv)
 {
-    panic_on(!strcmp(argv[0], "test"), "Parsing Err");
+    panic_on(strcmp(argv[0], "test"), "Parsing Err");
     if (!argv[1] || !argv[2] || !argv[3] || argv[4])
     {
-        perror("test accept 3 parameters");
+        perror("test accept 3 parameters\n");
         return 1;
     }
     if (!strcmp(argv[2], "="))
     {
         if (!strcmp(argv[1], argv[3]))
         {
-            printf("True");
+            printf("True\n");
         }
         else
         {
-            printf("False");
+            printf("False\n");
         }
     }
     else if (!strcmp(argv[2], "!="))
     {
         if (strcmp(argv[1], argv[3]))
         {
-            printf("True");
+            printf("True\n");
         }
         else
         {
-            printf("False");
+            printf("False\n");
         }
     }
     else if (!strcmp(argv[2], "-eq"))
     {
         if (checkIfConsistOfNum(argv[1]) && checkIfConsistOfNum(argv[3]) && atoi(argv[1]) == atoi(argv[3]))
         {
-            printf("True");
+            printf("True\n");
         }
         else
         {
-            printf("False");
+            printf("False\n");
         }
     }
     else if (!strcmp(argv[2], "-ne"))
@@ -743,24 +769,24 @@ int sh_test(char **argv)
             checkIfConsistOfNum(argv[3]) &&
             atoi(argv[1]) != atoi(argv[3]))
         {
-            printf("True");
+            printf("True\n");
         }
         else
         {
-            printf("False");
+            printf("False\n");
         }
     }
-    else if (!strcmp(argv[2], "-gt"))
+    else if (!strcmp(argv[2], "-gt") || !strcmp(argv[2], ">"))
     {
         if (checkIfConsistOfNum(argv[1]) &&
             checkIfConsistOfNum(argv[3]) &&
             atoi(argv[1]) > atoi(argv[3]))
         {
-            printf("True");
+            printf("True\n");
         }
         else
         {
-            printf("False");
+            printf("False\n");
         }
     }
     else if (!strcmp(argv[2], "-ge"))
@@ -770,24 +796,24 @@ int sh_test(char **argv)
             (atoi(argv[1]) > atoi(argv[3]) ||
              atoi(argv[1]) == atoi(argv[3])))
         {
-            printf("True");
+            printf("True\n");
         }
         else
         {
-            printf("False");
+            printf("False\n");
         }
     }
-    else if (!strcmp(argv[2], "-lt"))
+    else if (!strcmp(argv[2], "-lt") || !strcmp(argv[2], "<"))
     {
         if (checkIfConsistOfNum(argv[1]) &&
             checkIfConsistOfNum(argv[3]) &&
             atoi(argv[1]) < atoi(argv[3]))
         {
-            printf("True");
+            printf("True\n");
         }
         else
         {
-            printf("False");
+            printf("False\n");
         }
     }
     else if (!strcmp(argv[2], "-le"))
@@ -797,31 +823,36 @@ int sh_test(char **argv)
             (atoi(argv[1]) < atoi(argv[3]) ||
              atoi(argv[1]) == atoi(argv[3])))
         {
-            printf("True");
+            printf("True\n");
         }
         else
         {
-            printf("False");
+            printf("False\n");
         }
     }
     return 0;
 }
 int addjob(int pid, char *pname, int pstatus)
 {
-    for (int i = 0; i < MAX_JOB; i++)
+    int i = 0;
+    for (; i < MAX_JOB; i++)
     {
         if (childProcessPool[i].status == PDEAD)
         {
             childProcessPool[i].pid = pid;
             childProcessPool[i].pname = pname;
             childProcessPool[i].status = PALIVE;
+            break;
         }
     }
+
+    return (i == MAX_JOB) ? -1 : i;
 }
 // return jobid;
 int deljob(int pid)
 {
-    for (int i = 0; i < MAX_JOB; i++)
+    int i = 0;
+    for (; i < MAX_JOB; i++)
     {
         if (childProcessPool[i].pid == pid)
         {
@@ -830,6 +861,7 @@ int deljob(int pid)
             childProcessPool[i].status = PDEAD;
         }
     }
+    return (i == MAX_JOB) ? i : -1;
 }
 
 int runcmd(char *str)
@@ -873,11 +905,12 @@ int runcmd(char *str)
 int runRawcmd(char *cmd)
 {
     char *arr[MAX_CMD_PHASE_NUM];
-    int argc = splitcmd(cmd, arr);
+    splitcmd(cmd, arr);
     char **argv = parsecmd(arr);
     if (!argv[0])
     {
         perror("empty command!");
+        return 1;
     }
     else
     {
@@ -911,8 +944,9 @@ int runRawcmd(char *cmd)
         }
         else
         {
-            TODO();
+            execvp(argv[0], argv);
         }
+        return 0;
     }
 }
 int splitcmd(char *cmd, char **arr)
@@ -931,13 +965,14 @@ int splitcmd(char *cmd, char **arr)
             return argc;
         argc++;
     }
+    return 0;
 }
 char **parsecmd(char **arr)
 {
     ifile[0] = '\0';
     ofile[0] = '\0';
     imode = omode = 0;
-    char *argv[MAX_CMD_PHASE_NUM];
+    char **argv = (char **)malloc(sizeof(char *) * MAX_CMD_PHASE_NUM);
     for (int i = 0; i < MAX_CMD_PHASE_NUM; i++)
     {
         argv[i] = NULL;
@@ -945,22 +980,32 @@ char **parsecmd(char **arr)
     int vind = 0;
     int aind = 0;
     int state = 0; // 0:普通模式 1:等待读入文件名模式 2:等待输出文件名模式
-    while (aind < MAX_CMD_PHASE_NUM)
+    while (arr[aind] && aind < MAX_CMD_PHASE_NUM)
     {
         if (strlen(arr[aind]) == 1 && strchr(symbols, *arr[aind]))
         {
             char symb = *arr[aind];
             if (state == 0)
             {
-                if (symb == '<')
+                if (symb == '<' && strcmp(arr[0], "test"))
                 {
                     state = 1;
                     imode = 1;
                 }
-                else if (symb == '>')
+                else if (symb == '<' && !strcmp(arr[0], "test"))
+                {
+                    argv[vind] = arr[aind];
+                    vind++;
+                }
+                else if (symb == '>' && strcmp(arr[0], "test"))
                 {
                     state = 2;
                     omode = 1;
+                }
+                else if (symb == '>' && !strcmp(arr[0], "test"))
+                {
+                    argv[vind] = arr[aind];
+                    vind++;
                 }
                 else
                 {
@@ -1001,4 +1046,5 @@ char **parsecmd(char **arr)
             }
         }
     }
+    return argv;
 }

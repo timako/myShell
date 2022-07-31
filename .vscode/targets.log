@@ -1,4 +1,6 @@
 make all --print-data-base --no-builtin-variables --no-builtin-rules --question
+make: *** No rule to make target 'all'.  Stop.
+
 # GNU Make 4.2.1
 # Built for x86_64-pc-linux-gnu
 # Copyright (C) 1988-2016 Free Software Foundation, Inc.
@@ -6,7 +8,7 @@ make all --print-data-base --no-builtin-variables --no-builtin-rules --question
 # This is free software: you are free to change and redistribute it.
 # There is NO WARRANTY, to the extent permitted by law.
 
-# Make data base, printed on Tue Jul 26 11:09:01 2022
+# Make data base, printed on Fri Jul 29 19:45:14 2022
 
 # Variables
 
@@ -45,7 +47,7 @@ VSCODE_NLS_CONFIG = {"locale":"zh-cn","availableLanguages":{"*":"zh-cn"},"_langu
 # environment
 _ = /usr/share/code/code
 # environment
-JOURNAL_STREAM = 8:50168
+JOURNAL_STREAM = 8:48075
 # environment
 XDG_CONFIG_DIRS = /etc/xdg/xdg-ubuntu:/etc/xdg
 # makefile
@@ -61,7 +63,7 @@ XDG_DATA_DIRS = /usr/share/ubuntu:/usr/local/share/:/usr/share/:/var/lib/snapd/d
 # environment
 DBUS_SESSION_BUS_ADDRESS = unix:path=/run/user/1000/bus
 # environment
-MANAGERPID = 1197
+MANAGERPID = 1192
 # environment
 LESSOPEN = | /usr/bin/lesspipe %s
 # environment
@@ -73,7 +75,7 @@ PATH = /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/
 # environment
 GPG_AGENT_INFO = /run/user/1000/gnupg/S.gpg-agent:0:1
 # environment
-SESSION_MANAGER = local/timako-CNH5L:@/tmp/.ICE-unix/1438,unix/timako-CNH5L:/tmp/.ICE-unix/1438
+SESSION_MANAGER = local/timako-CNH5L:@/tmp/.ICE-unix/1432,unix/timako-CNH5L:/tmp/.ICE-unix/1432
 # environment
 XDG_RUNTIME_DIR = /run/user/1000
 # environment
@@ -81,7 +83,7 @@ XDG_MENU_PREFIX = gnome-
 # environment
 ELECTRON_RUN_AS_NODE = 1
 # environment
-INVOCATION_ID = bfdadd18c2d742769bf3699b0dc1b0d4
+INVOCATION_ID = d1ab7307554a4c3c8aaa6e2416ae5ff4
 # default
 .FEATURES := target-specific order-only second-expansion else-if shortest-stem undefine oneshell archives jobserver output-sync check-symlink load
 # environment
@@ -91,7 +93,7 @@ XDG_SESSION_DESKTOP = ubuntu
 # environment
 SSH_AUTH_SOCK = /run/user/1000/keyring/ssh
 # environment
-GIO_LAUNCHED_DESKTOP_FILE_PID = 4977
+GIO_LAUNCHED_DESKTOP_FILE_PID = 25013
 # automatic
 %F = $(notdir $%)
 # environment
@@ -101,7 +103,7 @@ PWD = /home/timako/linux/myShell
 # default
 .LOADED := 
 # environment
-SSH_AGENT_PID = 1399
+SSH_AGENT_PID = 1395
 # environment
 ORIGINAL_XDG_CURRENT_DESKTOP = ubuntu:GNOME
 # environment
@@ -117,7 +119,7 @@ VSCODE_CODE_CACHE_PATH = /home/timako/.config/Code/CachedData/92d25e35d9bf1a6b16
 # environment
 LOGNAME = timako
 # environment
-APPLICATION_INSIGHTS_NO_DIAGNOSTIC_CHANNEL = 1
+APPLICATION_INSIGHTS_NO_DIAGNOSTIC_CHANNEL = true
 # environment
 VSCODE_HANDLES_UNCAUGHT_ERRORS = true
 # environment
@@ -195,7 +197,7 @@ GJS_DEBUG_OUTPUT = stderr
 # environment
 LANG = C
 # environment
-VSCODE_PID = 4977
+VSCODE_PID = 25013
 # variable set hash-table stats:
 # Load=93/1024=9%, Rehash=0, Collisions=12/115=10%
 
@@ -205,9 +207,9 @@ VSCODE_PID = 4977
 
 # Directories
 
-# . (device 66315, inode 263079): 11 files, no impossibilities.
+# . (device 66315, inode 263079): 13 files, no impossibilities.
 
-# 11 files, no impossibilities in 1 directories.
+# 13 files, no impossibilities in 1 directories.
 
 # Implicit Rules
 
@@ -257,14 +259,12 @@ GNUmakefile:
 
 # No general ('VPATH' variable) search path.
 
-# strcache buffers: 1 (0) / strings = 19 / storage = 171 B / avg = 9 B
-# current buf: size = 8162 B / used = 171 B / count = 19 / avg = 9 B
+# strcache buffers: 1 (0) / strings = 21 / storage = 185 B / avg = 8 B
+# current buf: size = 8162 B / used = 185 B / count = 21 / avg = 8 B
 
-# strcache performance: lookups = 22 / hit rate = 13%
+# strcache performance: lookups = 24 / hit rate = 12%
 # hash-table stats:
-# Load=19/8192=0%, Rehash=0, Collisions=1/22=5%
-# Finished Make data base on Tue Jul 26 11:09:01 2022
+# Load=21/8192=0%, Rehash=0, Collisions=2/24=8%
+# Finished Make data base on Fri Jul 29 19:45:14 2022
 
  
-make: *** No rule to make target 'all'.  Stop.
-
