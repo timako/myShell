@@ -4,6 +4,8 @@
         "dirent.h": "c",
         "parser.h": "c",
         "string.h": "c",
-        "stdlib.h": "c"
+        "stdlib.h": "c",
+        "exception": "c",
+        "new": "c"
     }
 }
